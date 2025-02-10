@@ -9,17 +9,17 @@ time_now = time.time()
 time_pre = time.time()             
 
 
-lb3d = lb3dsp.LB3D_Solver_Single_Phase(nx=131,ny=131,nz=131)
+lb3d = lb3dsp.LB3D_Solver_Single_Phase(nx=103,ny=103,nz=103)
 
-lb3d.init_geo('./img_ftb131.txt')
+lb3d.init_geo_ply('./bone_file2.ply')
 lb3d.set_bc_rho_x1(0.99)
 lb3d.set_bc_rho_x0(1.0)
 lb3d.init_simulation()
 
-for iter in range(50000+1):
+for iter in range(10000+1):
     lb3d.step()
 
-    if (iter%500==0):
+    if (iter%100==0):
         
         time_pre = time_now
         time_now = time.time()
@@ -31,8 +31,10 @@ for iter in range(50000+1):
         h_elap, m_elap = divmod(m_elap, 60)
         
         print('----------Time between two outputs is %dh %dm %ds; elapsed time is %dh %dm %ds----------------------' %(h_diff, m_diff, s_diff,h_elap,m_elap,s_elap))
-        print('The %dth iteration, Max Force = %f,  force_scale = %f\n\n ' %(iter, 10.0,  10.0))
+        max_v = lb3d.get_max_v()
+
+        print('The %dth iteration, Max Force = %f,  force_scale = %f\n\n ' %(iter, max_v,  10.0))
         
-        if (iter%2000==0):
-            lb3d.export_VTK(iter)
+    if (iter%3==1):
+        lb3d.write_ply("./out7/LB_SingelPhase_"+str(int(iter/3+1))+".ply")
             

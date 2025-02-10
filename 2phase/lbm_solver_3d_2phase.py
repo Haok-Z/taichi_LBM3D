@@ -4,6 +4,8 @@ import numpy as np
 #import taichi_glsl as ts
 from pyevtk.hl import gridToVTK
 import time
+from plyfile import PlyData, PlyElement
+
 #from taichi_glsl import scalar
 
 #from taichi_glsl.scalar import isinf, isnan
@@ -22,6 +24,7 @@ niu_l = 0.1         #psi>0
 niu_g = 0.1         #psi<0
 psi_solid = 0.7
 CapA = 0.005
+
 
 #Boundary condition mode: 0=periodic, 1= fix pressure, 2=fix velocity; boundary pressure value (rho); boundary velocity value for vx,vy,vz
 bc_x_left, rho_bcxl, vx_bcxl, vy_bcxl, vz_bcxl = 0, 1.0, 0.0e-5, 0.0, 0.0  #Boundary x-axis left side
@@ -50,7 +53,7 @@ rho_r = ti.field(ti.f32, shape=(nx,ny,nz))
 rho_b = ti.field(ti.f32, shape=(nx,ny,nz))
 rhor = ti.field(ti.f32, shape=(nx,ny,nz))
 rhob = ti.field(ti.f32, shape=(nx,ny,nz))
-
+max_v = ti.field(ti.f32, shape=())
 
 # Sparse Storage memory allocation
 #f = ti.field(ti.f32)
@@ -152,9 +155,9 @@ ti.static(LR)
 #ti.static(S_dig)
 
 
-x = np.linspace(0, nx, nx)
-y = np.linspace(0, ny, ny)
-z = np.linspace(0, nz, nz)
+x = np.linspace(0, nx-1, nx)
+y = np.linspace(0, ny-1, ny)
+z = np.linspace(0, nz-1, nz)
 X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
 
 
@@ -603,8 +606,21 @@ def streaming3():
             v[i,j,k] /= rho[i,j,k]
             v[i,j,k] += (ext_f[None]/2)/rho[i,j,k]
             psi[i,j,k] = rho_r[i,j,k]-rho_b[i,j,k]/(rho_r[i,j,k] + rho_b[i,j,k])
-                
-        
+
+
+
+
+
+@ti.kernel
+def cal_max_v():
+    for I in ti.grouped(rho):
+        ti.atomic_max(max_v[None], v[I].norm())
+
+
+def get_max_v():
+    max_v[None] = -1e10
+    cal_max_v()
+    return max_v[None]
 
 time_init = time.time()
 time_now = time.time()
@@ -642,23 +658,57 @@ for iter in range(80000+1):
         h_diff, m_diff = divmod(m_diff, 60)
         m_elap, s_elap = divmod(elap_time, 60)
         h_elap, m_elap = divmod(m_elap, 60)
-        
+        max_v0 = get_max_v()
+
+
         print('----------Time between two outputs is %dh %dm %ds; elapsed time is %dh %dm %ds----------------------' %(h_diff, m_diff, s_diff,h_elap,m_elap,s_elap))
-        print('The %dth iteration, Max Force = %f,  force_scale = %f\n\n ' %(iter, 10.0,  10.0))
+        print('The %dth iteration, Max Force = %f,  force_scale = %f\n\n ' %(iter, max_v0,  10.0))
         
-        if (iter%10000==0):
-            gridToVTK(
-                "./structured"+str(iter),
-                x,
-                y,
-                z,
-                #cellData={"pressure": pressure},
-                pointData={ "Solid": np.ascontiguousarray(solid.to_numpy()),
-                            "rho": np.ascontiguousarray(rho.to_numpy()[0:nx,0:ny,0:nz]),
-                            "phase": np.ascontiguousarray(psi.to_numpy()[0:nx,0:ny,0:nz]),
-                            "velocity": (np.ascontiguousarray(v.to_numpy()[0:nx,0:ny,0:nz,0]), np.ascontiguousarray(v.to_numpy()[0:nx,0:ny,0:nz,1]),np.ascontiguousarray(v.to_numpy()[0:nx,0:ny,0:nz,2]))
-                            }
-            )   
+        # if (iter%10000==0):
+        #     gridToVTK(
+        #         "./structured"+str(iter),
+        #         x,
+        #         y,
+        #         z,
+        #         #cellData={"pressure": pressure},
+        #         pointData={ "Solid": np.ascontiguousarray(solid.to_numpy()),
+        #                     "rho": np.ascontiguousarray(rho.to_numpy()[0:nx,0:ny,0:nz]),
+        #                     "phase": np.ascontiguousarray(psi.to_numpy()[0:nx,0:ny,0:nz]),
+        #                     "velocity": (np.ascontiguousarray(v.to_numpy()[0:nx,0:ny,0:nz,0]), np.ascontiguousarray(v.to_numpy()[0:nx,0:ny,0:nz,1]),np.ascontiguousarray(v.to_numpy()[0:nx,0:ny,0:nz,2]))
+        #                     }
+        #     )
+
+        x0, y0, z0, num = x.shape[0], y.shape[0], z.shape[0], x.shape[0] * y.shape[0] * z.shape[0]
+        # flat_x = x.reshape(-1)
+        # flat_y = y.reshape(-1)
+        # flat_z = z.reshape(-1)
+
+        solid0 = np.ascontiguousarray(solid.to_numpy())
+        rho0 = np.ascontiguousarray(rho.to_numpy())
+        psi0 = np.ascontiguousarray(psi.to_numpy())
+        flat_v = np.ascontiguousarray(v.to_numpy())
+
+        list_pos = []
+        for i in range(x0):
+            for j in range(y0):
+                for k in range(z0):
+                    pos_tmp = [i, j, k, solid0[i, j, k], rho0[i, j, k],  psi0[i, j, k], flat_v[i, j, k, 0], flat_v[i, j, k, 1],
+                               flat_v[i, j, k, 2]]  # data to write
+                    list_pos.append(tuple(pos_tmp))
+
+        data_type = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+                     ('solid', 'f4'), ('rho', 'f4'), ('phase', 'f4'),
+                     ('vx', 'f4'), ('vy', 'f4'), ('vz', 'f4')]
+
+        np_pos = np.array(list_pos, dtype=data_type)
+
+        # 创建PLY元素并写入文件
+        vertex_element = PlyElement.describe(np_pos, 'vertex')
+        ply_data = PlyData([vertex_element])
+        filename = "./out/LB_2Phase_"+str(int(iter/500+1))+".ply"
+        ply_data.write(filename)
+
+        print(f"PLY文件已写入: {filename}")
 
 #ti.print_kernel_profile_info()
 #ti.print_profile_info()

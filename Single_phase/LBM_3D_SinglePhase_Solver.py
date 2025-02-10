@@ -1,7 +1,10 @@
 from sympy import inverse_mellin_transform
 import taichi as ti
 import numpy as np
+from plyfile import *
 from pyevtk.hl import gridToVTK
+from plyfile import PlyData, PlyElement
+
 import time
 
 #ti.init(arch=ti.gpu, dynamic_index=False, kernel_profiler=True, print_ir=False)
@@ -15,17 +18,18 @@ class LB3D_Solver_Single_Phase:
         self.nx,self.ny,self.nz = nx,ny,nz
         #nx,ny,nz = 120,120,120
         self.fx,self.fy,self.fz = 0.0e-6,0.0,0.0
-        self.niu = 0.16667
+        self.niu = 0.8
+        # self.deltat = 0.01
 
         self.max_v=ti.field(ti.f32,shape=())
 
         #Boundary condition mode: 0=periodic, 1= fix pressure, 2=fix velocity; boundary pressure value (rho); boundary velocity value for vx,vy,vz
-        self.bc_x_left, self.rho_bcxl, self.vx_bcxl, self.vy_bcxl, self.vz_bcxl = 0, 1.0, 0.0e-5, 0.0, 0.0  #Boundary x-axis left side
-        self.bc_x_right, self.rho_bcxr, self.vx_bcxr, self.vy_bcxr, self.vz_bcxr = 0, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
-        self.bc_y_left, self.rho_bcyl, self.vx_bcyl, self.vy_bcyl, self.vz_bcyl = 0, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
-        self.bc_y_right, self.rho_bcyr, self.vx_bcyr, self.vy_bcyr, self.vz_bcyr = 0, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
-        self.bc_z_left, self.rho_bczl, self.vx_bczl, self.vy_bczl, self.vz_bczl = 0, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
-        self.bc_z_right, self.rho_bczr, self.vx_bczr, self.vy_bczr, self.vz_bczr = 0, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
+        self.bc_x_left, self.rho_bcxl, self.vx_bcxl, self.vy_bcxl, self.vz_bcxl = 1, 1.0, 0.0e-5, 0.0, 0.0  #Boundary x-axis left side
+        self.bc_x_right, self.rho_bcxr, self.vx_bcxr, self.vy_bcxr, self.vz_bcxr = 1, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
+        self.bc_y_left, self.rho_bcyl, self.vx_bcyl, self.vy_bcyl, self.vz_bcyl =  1, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
+        self.bc_y_right, self.rho_bcyr, self.vx_bcyr, self.vy_bcyr, self.vz_bcyr = 1, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
+        self.bc_z_left, self.rho_bczl, self.vx_bczl, self.vy_bczl, self.vz_bczl =  1, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
+        self.bc_z_right, self.rho_bczr, self.vx_bczr, self.vy_bczr, self.vz_bczr = 1, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
 
 
         if sparse_storage == False:
@@ -109,9 +113,9 @@ class LB3D_Solver_Single_Phase:
         
         self.inv_M[None] = ti.Matrix(inv_M_np)
 
-        self.x = np.linspace(0, nx, nx)
-        self.y = np.linspace(0, ny, ny)
-        self.z = np.linspace(0, nz, nz)
+        self.x = np.linspace(0, nx-1, nx)
+        self.y = np.linspace(0, ny-1, ny)
+        self.z = np.linspace(0, nz-1, nz)
         #X, Y, Z = np.meshgrid(self.x, self.y, self.z, indexing='ij')
 
 
@@ -175,7 +179,63 @@ class LB3D_Solver_Single_Phase:
         in_dat[in_dat>0] = 1
         in_dat = np.reshape(in_dat, (self.nx,self.ny,self.nz),order='F')
         self.solid.from_numpy(in_dat)
-        
+
+    def init_geo_ply(self,filename):
+        # in_dat = np.loadtxt(filename)
+        # in_dat[in_dat>0] = 1
+        # in_dat = np.reshape(in_dat, (self.nx,self.ny,self.nz),order='F')
+
+        ply_data = PlyData.read(filename)
+        vertices = np.vstack((ply_data['vertex']['x'], ply_data['vertex']['y'], ply_data['vertex']['z'])).T
+        tensor = np.zeros((self.nx,self.ny,self.nz), dtype=int)
+        valid_indices = np.all((vertices >= 0) & (vertices < 103), axis=1)
+        rounded_vertices = np.round(vertices[valid_indices]).astype(int)
+
+        np.add.at(tensor, (rounded_vertices[:, 0], rounded_vertices[:, 1], rounded_vertices[:, 2]), 1)
+        print(f"Number of points set to 1: {np.sum(tensor)}")
+
+
+
+        solid_arr = tensor.reshape((self.nx,self.ny,self.nz))
+        print('sdf_arr_min:', np.min(solid_arr), 'sdf_arr_max:', np.max(solid_arr))
+
+        self.solid.from_numpy(solid_arr)
+
+        # solid_values = self.solid.to_numpy().ravel()  # 将三维数组展平为一维数组
+        # x_vals, y_vals, z_vals = np.meshgrid(self.x, self.y, self.z, indexing='ij')
+        # coordinates = np.column_stack((x_vals.ravel(), y_vals.ravel(), z_vals.ravel()))
+        #
+        # # 确保 solid_values 和 coordinates 的长度一致
+        # assert solid_values.shape[0] == coordinates.shape[0]
+        #
+        # # 定义 dtype 描述符，这将用于创建 vertex_data 数组和 PlyElement 对象
+        # vertex_dtype = np.dtype([
+        #     ('x', 'f4'),  # x 坐标，4 字节浮点数
+        #     ('y', 'f4'),  # y 坐标，4 字节浮点数
+        #     ('z', 'f4'),  # z 坐标，4 字节浮点数
+        #     ('solid', 'i1')  # solid 属性，1 字节整数
+        # ])
+        # n_vertices = self.nx * self.ny * self.nz
+        #
+        # # 创建 vertex_data 数组并填充数据
+        # vertex_data = np.empty(n_vertices, dtype=vertex_dtype)
+        # vertex_data['x'] = coordinates[:, 0]
+        # vertex_data['y'] = coordinates[:, 1]
+        # vertex_data['z'] = coordinates[:, 2]
+        # vertex_data['solid'] = solid_values
+        #
+        # vertex_element = PlyElement.describe(vertex_data, 'vertex')
+        # ply_data = PlyData([vertex_element], text=True)  # 可以选择 text=True 以文本格式写入，或者 binary=True 以二进制格式写入
+        # ply_data.write('output_solid.ply')
+        #
+        # print("PLY file with coordinates and solid values written successfully.")
+
+
+    def readPly(self, filename):
+        ply = PlyData.read(filename)
+        obj_verts = ply['vertex'].data
+        verts_array = np.array([[x, y, z, solid] for x, y, z, solid in obj_verts])
+        return verts_array
 
     @ti.kernel
     def static_init(self):
@@ -256,12 +316,24 @@ class LB3D_Solver_Single_Phase:
 
         return iout
 
+    @ti.func
+    def fix_pressure_index(self, i):
+        iout = i
+        if i[0] < 0:     iout[0] = 0
+        if i[0] > self.nx - 1:  iout[0] = self.nx - 1
+        if i[1] < 0:     iout[1] = 0
+        if i[1] > self.ny - 1:  iout[1] = self.ny - 1
+        if i[2] < 0:     iout[2] = 0
+        if i[2] > self.nz - 1:  iout[2] = self.nz - 1
+
+        return iout
+
     @ti.kernel
     def streaming1(self):
         for i in ti.grouped(self.rho):
             if (self.solid[i] == 0 and i.x<self.nx and i.y<self.ny and i.z<self.nz):
                 for s in ti.static(range(19)):
-                    ip = self.periodic_index(i+self.e[s])
+                    ip = self.fix_pressure_index(i+self.e[s])
                     if (self.solid[ip]==0):
                         self.F[ip][s] = self.f[i][s]
                     else:
@@ -472,7 +544,42 @@ class LB3D_Solver_Single_Phase:
                                             np.ascontiguousarray(self.v.to_numpy()[0:self.nx,0:self.ny,0:self.nz,1]),
                                             np.ascontiguousarray(self.v.to_numpy()[0:self.nx,0:self.ny,0:self.nz,2]))
                             }
-            )   
+
+            )
+
+
+
+        # writes position and diameter
+
+    def write_ply(self, filename):
+        x, y, z, num = self.x.shape[0], self.y.shape[0], self.z.shape[0], self.x.shape[0] * self.y.shape[0] * self.z.shape[0]
+        flat_x = self.x.reshape(-1)
+        flat_y = self.y.reshape(-1)
+        flat_z = self.z.reshape(-1)
+
+        solid = np.ascontiguousarray(self.solid.to_numpy())
+        rho = np.ascontiguousarray(self.rho.to_numpy())
+        flat_v = np.ascontiguousarray(self.v.to_numpy())
+
+        list_pos = []
+        for i in range(x):
+            for j in range(y):
+                for k in range(z):
+                    pos_tmp = [i, j, k, solid[i, j, k], rho[i, j, k], flat_v[i, j, k, 0], flat_v[i, j, k, 1], flat_v[i, j, k, 2]]  # data to write
+                    list_pos.append(tuple(pos_tmp))
+
+        data_type = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+                    ('solid', 'i4'), ('rho', 'f4'),
+                    ('vx', 'f4'), ('vy', 'f4'), ('vz', 'f4')]
+
+        np_pos = np.array(list_pos, dtype=data_type)
+
+        # 创建PLY元素并写入文件
+        vertex_element = PlyElement.describe(np_pos, 'vertex')
+        ply_data = PlyData([vertex_element])
+        ply_data.write(filename)
+
+        print(f"PLY文件已写入: {filename}")
 
     def step(self):
         self.colission()

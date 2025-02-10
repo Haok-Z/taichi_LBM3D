@@ -5,39 +5,40 @@ import numpy as np
 # import taichi_glsl as ts
 from pyevtk.hl import gridToVTK
 import time
+from plyfile import PlyData, PlyElement
 
 #from taichi_glsl import scalar
 #from taichi_glsl.scalar import isinf, isnan
 # from taichi_glsl.vector import vecFill
 
 #ti.init(arch=ti.cpu)
-ti.init(arch=ti.gpu,device_memory_fraction=0.5,dynamic_index=True,offline_cache=True,kernel_profiler=True)
+ti.init(arch=ti.gpu,device_memory_fraction=0.5,offline_cache=True,kernel_profiler=True)
 
 
 enable_projection = True
-nx,ny,nz = 131,131,131
+nx,ny,nz = 103,103,103
 #nx,ny,nz = 131,131,131
 fx,fy,fz = 5.0e-5,0.0,0.0
 #niu = 0.1
 niu_l = 0.1         #psi>0
-niu_g = 0.1         #psi<0
+niu_g = 0.9         #psi<0
 psi_solid = 0.7
 CapA = 0.005
 
 #Boundary condition mode: 0=periodic, 1= fix pressure, 2=fix velocity; boundary pressure value (rho); boundary velocity value for vx,vy,vz
-bc_x_left, rho_bcxl, vx_bcxl, vy_bcxl, vz_bcxl = 0, 1.0, 0.0e-5, 0.0, 0.0  #Boundary x-axis left side
+bc_x_left, rho_bcxl, vx_bcxl, vy_bcxl, vz_bcxl = 1, 1.0, 0.0e-5, 0.0, 0.0  #Boundary x-axis left side
 bc_x_right, rho_bcxr, vx_bcxr, vy_bcxr, vz_bcxr = 0, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
 bc_y_left, rho_bcyl, vx_bcyl, vy_bcyl, vz_bcyl = 0, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
 bc_y_right, rho_bcyr, vx_bcyr, vy_bcyr, vz_bcyr = 0, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
 bc_z_left, rho_bczl, vx_bczl, vy_bczl, vz_bczl = 0, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
 bc_z_right, rho_bczr, vx_bczr, vy_bczr, vz_bczr = 0, 1.0, 0.0, 0.0, 0.0  #Boundary x-axis left side
 
-bc_psi_x_left, psi_x_left = 1, -1.0          #   boundary condition for phase-field: 0 = periodic, 1 = constant 
-bc_psi_x_right, psi_x_right = 0, 1.0        #   value on the boundary, value = -1.0 phase1 or 1.0 = phase 2
-bc_psi_y_left, psi_y_left = 0, 1.0
-bc_psi_y_right, psi_y_right = 0, 1.0
-bc_psi_z_left, psi_z_left = 0, 1.0
-bc_psi_z_right, psi_z_right = 0, 1.0
+bc_psi_x_left, psi_x_left = 1, -2.0          #   boundary condition for phase-field: 0 = periodic, 1 = constant
+bc_psi_x_right, psi_x_right = 1, 0.0        #   value on the boundary, value = -1.0 phase1 or 1.0 = phase 2
+bc_psi_y_left, psi_y_left = 1, 0.0
+bc_psi_y_right, psi_y_right = 1, 0.0
+bc_psi_z_left, psi_z_left = 1, 0.0
+bc_psi_z_right, psi_z_right = 1, 0.0
 
 # Non Sparse memory allocation
 # f = ti.field(ti.f32,shape=(nx,ny,nz,19))
@@ -101,14 +102,14 @@ inv_M = ti.field(ti.f32, shape=(19,19))
 #s_other=8.0*(2.0-s_v)/(8.0-s_v)
 lg0, wl, wg = 0.0, 0.0, 0.0
 l1, l2, g1, g2 = 0.0, 0.0, 0.0, 0.0
-wl = 1.0/(niu_l/(1.0/3.0)+0.5)
-wg = 1.0/(niu_g/(1.0/3.0)+0.5)
+# wl = 1.0/(niu_l*3.0+0.5)
+# wg = 1.0/(niu_g*3.0+0.5)
 lg0 = 2*wl*wg/(wl+wg)
-l1=2*(wl-lg0)*10
-l2=-l1/0.2
-g1=2*(lg0-wg)*10
-g2=g1/0.2
-
+l1 = 2*(wl-lg0)*10
+l2 = -l1/0.2
+g1 = 2*(lg0-wg)*10
+g2 = g1/0.2
+# print(wl,wg, lg0, l1, l2, g1, g2,'000')
 #S_np = np.zeros((19,19))
 #S_np[0,0]=0;        S_np[1,1]=s_v;          S_np[2,2]=s_v;          S_np[3,3]=0;        S_np[4,4]=s_other;      S_np[5,5]=0;
 #S_np[6,6]=s_other;  S_np[7,7]=0;            S_np[8,8]=s_other;      S_np[9,9]=s_v;      S_np[10,10]=s_v;        S_np[11,11]=s_v;
@@ -154,9 +155,9 @@ ti.static(LR)
 #ti.static(S_dig)
 
 
-x = np.linspace(0, nx, nx)
-y = np.linspace(0, ny, ny)
-z = np.linspace(0, nz, nz)
+x = np.linspace(0, nx-1, nx)
+y = np.linspace(0, ny-1, ny)
+z = np.linspace(0, nz-1, nz)
 X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
 
 
@@ -201,6 +202,59 @@ def init_geo(filename, filename2):
     phase_in_dat = np.reshape(phase_in_dat, (nx,ny,nz), order='F')
 
     return in_dat, phase_in_dat
+
+def init_geo_ply(filename):
+    # in_dat = np.loadtxt(filename)
+    # in_dat[in_dat>0] = 1
+    # in_dat = np.reshape(in_dat, (self.nx,self.ny,self.nz),order='F')
+
+    ply_data = PlyData.read(filename)
+    vertices = np.vstack((ply_data['vertex']['x'], ply_data['vertex']['y'], ply_data['vertex']['z'])).T
+    tensor = np.zeros((nx,ny,nz), dtype=int)
+    tensor_psi = np.ones((nx,ny,nz), dtype=int)
+    valid_indices = np.all((vertices >= 0) & (vertices < 103), axis=1)
+    rounded_vertices = np.round(vertices[valid_indices]).astype(int)
+
+    np.add.at(tensor, (rounded_vertices[:, 0], rounded_vertices[:, 1], rounded_vertices[:, 2]), 1)
+    print(f"Number of points set to 1: {np.sum(tensor)}")
+
+
+
+    solid_arr = tensor.reshape((nx,ny,nz))
+    psi_arr = tensor_psi.reshape((nx,ny,nz))
+    print('sdf_arr_min:', np.min(solid_arr), 'sdf_arr_max:', np.max(solid_arr))
+
+    solid.from_numpy(solid_arr)
+    psi.from_numpy(psi_arr)
+
+    # solid_values = self.solid.to_numpy().ravel()  # 将三维数组展平为一维数组
+    # x_vals, y_vals, z_vals = np.meshgrid(self.x, self.y, self.z, indexing='ij')
+    # coordinates = np.column_stack((x_vals.ravel(), y_vals.ravel(), z_vals.ravel()))
+    #
+    # # 确保 solid_values 和 coordinates 的长度一致
+    # assert solid_values.shape[0] == coordinates.shape[0]
+    #
+    # # 定义 dtype 描述符，这将用于创建 vertex_data 数组和 PlyElement 对象
+    # vertex_dtype = np.dtype([
+    #     ('x', 'f4'),  # x 坐标，4 字节浮点数
+    #     ('y', 'f4'),  # y 坐标，4 字节浮点数
+    #     ('z', 'f4'),  # z 坐标，4 字节浮点数
+    #     ('solid', 'i1')  # solid 属性，1 字节整数
+    # ])
+    # n_vertices = self.nx * self.ny * self.nz
+    #
+    # # 创建 vertex_data 数组并填充数据
+    # vertex_data = np.empty(n_vertices, dtype=vertex_dtype)
+    # vertex_data['x'] = coordinates[:, 0]
+    # vertex_data['y'] = coordinates[:, 1]
+    # vertex_data['z'] = coordinates[:, 2]
+    # vertex_data['solid'] = solid_values
+    #
+    # vertex_element = PlyElement.describe(vertex_data, 'vertex')
+    # ply_data = PlyData([vertex_element], text=True)  # 可以选择 text=True 以文本格式写入，或者 binary=True 以二进制格式写入
+    # ply_data.write('output_solid.ply')
+    #
+    # print("PLY file with coordinates and solid values written successfully.")
 
 @ti.kernel
 def static_init():
@@ -272,7 +326,6 @@ def Compute_C(i):
     if (abs(rho_r[i]-rho_b[i]) > 0.9) and (ind_S == 1):
         # C = ts.vecFill(3,0.0)
         C = ti.Vector([0.0,0.0,0.0])
-    
     return C
 
 @ti.func
@@ -308,7 +361,7 @@ def colission():
             C = Compute_C(ti.Vector([i,j,k]))
             cc = C.norm()
             normal = ti.Vector([0.0,0.0,0.0])
-            if cc>0 :
+            if cc>0e-5 :
                 normal = C/cc
 
             m_temp = multiply_M(i,j,k)
@@ -328,7 +381,7 @@ def colission():
 
             #print(i,j,k,solid[i,j,k],m_temp, meq)
             for s in range(19):
-                m_temp[s] -= S_local[s]*(m_temp[s]-meq[s])
+                m_temp[s] -= S_local[s] *(m_temp[s]-meq[s])
                 m_temp[s] += (1-0.5*S_local[s])*GuoF(i,j,k,s,v[i,j,k])
                 #m_temp[s] -= S_dig[s]*(m_temp[s]-meq[s])
                 #m_temp[s] += (1-0.5*S_dig[s])*GuoF(i,j,k,s,v[i,j,k])
@@ -349,7 +402,7 @@ def colission():
                 #if ((ts.scalar.isinf(f[i,j,k,s])) or (ts.scalar.isnan(f[i,j,k,s]))):
                 #    print(i,j,k,solid[i,j,k], f[i,j,k,s],m_temp,meq, rho[i,j,k])
 
-            if (cc>0):
+            if (cc>0e-5):
                 for kk in ti.static([1,3,5,7,9,11,13,15,17]):
                     # ef=ts.vector.dot(e[kk],C)
                     ef=e[kk].dot(C)
@@ -378,12 +431,12 @@ def colission():
 @ti.func
 def periodic_index(i):
     iout = i
-    if i[0]<0:     iout[0] = nx-1
-    if i[0]>nx-1:  iout[0] = 0
-    if i[1]<0:     iout[1] = ny-1
-    if i[1]>ny-1:  iout[1] = 0
-    if i[2]<0:     iout[2] = nz-1
-    if i[2]>nz-1:  iout[2] = 0
+    if i[0]<0:     iout[0] = 0
+    if i[0]>nx-1:  iout[0] = nx-1
+    if i[1]<0:     iout[1] = 0
+    if i[1]>ny-1:  iout[1] = ny-1
+    if i[2]<0:     iout[2] = 0
+    if i[2]>nz-1:  iout[2] = nz-1
 
     return iout
 
@@ -445,7 +498,7 @@ def streaming1():
 @ti.kernel
 def Boundary_condition_psi():
     if bc_psi_x_left == 1:
-        for j,k in ti.ndrange((0,ny),(0,nz)):
+        for j,k in ti.ndrange((35,70),(35,70)):
             if (solid[0,j,k]==0):
                 psi[0,j,k] = psi_x_left
                 rho_r[0,j,k] = (psi_x_left + 1.0)/2.0
@@ -491,7 +544,7 @@ def Boundary_condition_psi():
 @ti.kernel
 def Boundary_condition():
     if ti.static(bc_x_left==1):
-        for j,k in ti.ndrange((0,ny),(0,nz)):
+        for j,k in ti.ndrange((35,70),(35,70)):
             if (solid[0,j,k]==0):
                 for s in range(19):
                     if (solid[1,j,k]>0):
@@ -522,6 +575,7 @@ def Boundary_condition():
 
     
     # Direction Y
+
     if ti.static(bc_y_left==1):
         for i,k in ti.ndrange((0,nx),(0,nz)):
             if (solid[i,0,k]==0):
@@ -553,6 +607,7 @@ def Boundary_condition():
                     F[i,ny-1,k,s]=feq(LR[s], 1.0, bc_vel_y_right[None])-F[i,ny-1,k,LR[s]]+feq(s,1.0,bc_vel_y_right[None]) 
     
     # Z direction
+
     if ti.static(bc_z_left==1):
         for i,j in ti.ndrange((0,nx),(0,ny)):
             if (solid[i,j,0]==0):
@@ -614,51 +669,72 @@ dt_count = 0
 
 
 #solid_np = init_geo('./img_ftb131.txt')
-solid_np, phase_np = init_geo('./img_ftb131.txt','./phase_ftb131.dat')
-solid.from_numpy(solid_np)
-psi.from_numpy(phase_np)
+# init_geo_ply('./bone3.ply')
+init_geo_ply('./bone_file2.ply')
+# solid.from_numpy(solid_np)
+# psi.from_numpy(phase_np)
 
 static_init()
 init()
+x0, y0, z0, num = x.shape[0], y.shape[0], z.shape[0], x.shape[0] * y.shape[0] * z.shape[0]
 
-#print(wl,wg, lg0, l1, l2,'~@@@@@~@~@~@~@')
+print(wl,wg, lg0, l1, l2, g1, g2,'~@@@@@~@~@~@~@')
 
-for iter in range(100+1):
+for iter in range(100000+1):
     colission()
     streaming1()
     Boundary_condition()
     #streaming2()
     streaming3()
     Boundary_condition_psi()
+    number = 100
 
-    
-    if (iter%1000==0):
-        
+    if (iter % 5000 == 0):
         time_pre = time_now
         time_now = time.time()
-        diff_time = int(time_now-time_pre)
-        elap_time = int(time_now-time_init)
+        diff_time = int(time_now - time_pre)
+        elap_time = int(time_now - time_init)
         m_diff, s_diff = divmod(diff_time, 60)
         h_diff, m_diff = divmod(m_diff, 60)
         m_elap, s_elap = divmod(elap_time, 60)
         h_elap, m_elap = divmod(m_elap, 60)
-        
-        print('----------Time between two outputs is %dh %dm %ds; elapsed time is %dh %dm %ds----------------------' %(h_diff, m_diff, s_diff,h_elap,m_elap,s_elap))
-        print('The %dth iteration, Max Force = %f,  force_scale = %f\n\n ' %(iter, 10.0,  10.0))
-        
-        if (iter%1000==0):
-            gridToVTK(
-                "./structured"+str(iter),
-                x,
-                y,
-                z,
-                #cellData={"pressure": pressure},
-                pointData={ "Solid": np.ascontiguousarray(solid.to_numpy()),
-                            "rho": np.ascontiguousarray(rho.to_numpy()[0:nx,0:ny,0:nz]),
-                            "phase": np.ascontiguousarray(psi.to_numpy()[0:nx,0:ny,0:nz]),
-                            "velocity": (np.ascontiguousarray(v.to_numpy()[0:nx,0:ny,0:nz,0]), np.ascontiguousarray(v.to_numpy()[0:nx,0:ny,0:nz,1]),np.ascontiguousarray(v.to_numpy()[0:nx,0:ny,0:nz,2]))
-                            }
-            )   
+
+        print(
+            '----------Time between two outputs is %dh %dm %ds; elapsed time is %dh %dm %ds----------------------' % (
+                h_diff, m_diff, s_diff, h_elap, m_elap, s_elap))
+        print('The %dth iteration, Max Force = %f,  force_scale = %f\n\n ' % (iter, 10.0, 10.0))
+
+    if (iter % number == 0):
+    #if (iter > 159999 and iter % number == 0):
+
+        solid0 = np.ascontiguousarray(solid.to_numpy())
+        rho0 = np.ascontiguousarray(rho.to_numpy())
+        psi0 = np.ascontiguousarray(psi.to_numpy())
+        flat_v = np.ascontiguousarray(v.to_numpy())
+
+        list_pos = []
+        for i in range(x0):
+            for j in range(y0):
+                for k in range(z0):
+                    pos_tmp = [i, j, k, solid0[i, j, k], rho0[i, j, k], psi0[i, j, k], flat_v[i, j, k, 0],
+                               flat_v[i, j, k, 1],
+                               flat_v[i, j, k, 2]]  # data to write
+                    list_pos.append(tuple(pos_tmp))
+
+        data_type = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+                     ('solid', 'f4'), ('rho', 'f4'), ('phase', 'f4'),
+                     ('vx', 'f4'), ('vy', 'f4'), ('vz', 'f4')]
+
+        np_pos = np.array(list_pos, dtype=data_type)
+
+        # 创建PLY元素并写入文件
+        vertex_element = PlyElement.describe(np_pos, 'vertex')
+        ply_data = PlyData([vertex_element])
+        # filename = "./out5/LB_2Phase_" + str(int(iter / 200 + 1)) + ".ply"
+        filename = "./out41/LB_2Phase_" + str(int(iter / number + 1)) + ".ply"
+        ply_data.write(filename)
+
+        print(f"PLY文件已写入: {filename}")
 
 ti.profiler.print_kernel_profiler_info()
 ti.profiler.print_memory_profiler_info()
